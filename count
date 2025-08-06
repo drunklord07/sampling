@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+# count_ext_recursive.py
+import os
+import sys
+from collections import Counter
+
+# minimal magic‐number signatures for common file types
+MAGIC_TYPES = [
+    (b'\x1f\x8b',         'gzip'),
+    (b'PK\x03\x04',       'zip'),
+    (b'\x89PNG\r\n\x1a\n', 'png'),
+    (b'\xff\xd8\xff',     'jpg'),
+    (b'%PDF',             'pdf'),
+    (b'\x7fELF',          'elf'),
+]
+
+def detect_type(path):
+    """
+    Read the first few bytes of a file to detect its type via magic numbers.
+    Returns a lowercase type name or 'unknown'.
+    """
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(8)
+    except Exception:
+        return 'unknown'
+    for sig, name in MAGIC_TYPES:
+        if header.startswith(sig):
+            return name
+    return 'unknown'
+
+def scan(root):
+    global_counts = Counter()
+
+    # Walk all subdirectories
+    for dirpath, dirnames, filenames in os.walk(root):
+        local = Counter()
+        for fname in filenames:
+            full = os.path.join(dirpath, fname)
+            ext = os.path.splitext(fname)[1].lower().lstrip('.')
+            if ext:
+                key = ext
+            else:
+                key = detect_type(full)
+            local[key] += 1
+            global_counts[key] += 1
+
+        if local:
+            # compute column widths
+            col1 = max(len("Type/Extension"), *(len(k) for k in local))
+            col2 = max(len("Count"), *(len(str(v)) for v in local.values()))
+
+            border = f"+{'-'*(col1+2)}+{'-'*(col2+2)}+"
+            header = f"| {'Type/Extension'.ljust(col1)} | {'Count'.rjust(col2)} |"
+
+            print(f"Directory: {dirpath}")
+            print(border)
+            print(header)
+            print(border)
+            for k, v in sorted(local.items()):
+                print(f"| {k.ljust(col1)} | {str(v).rjust(col2)} |")
+            print(border)
+            print()
+
+    # overall summary
+    total = sum(global_counts.values())
+    col1 = max(len("Type/Extension"), *(len(k) for k in global_counts))
+    col2 = max(len("Count"), *(len(str(v)) for v in global_counts.values()))
+
+    border = f"+{'-'*(col1+2)}+{'-'*(col2+2)}+"
+    header = f"| {'Type/Extension'.ljust(col1)} | {'Count'.rjust(col2)} |"
+
+    print("Overall summary:")
+    print(f"Total files scanned: {total}")
+    print(border)
+    print(header)
+    print(border)
+    for k, v in sorted(global_counts.items()):
+        print(f"| {k.ljust(col1)} | {str(v).rjust(col2)} |")
+    print(border)
+
+def main():
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} /path/to/root", file=sys.stderr)
+        sys.exit(1)
+
+    root = os.path.abspath(os.path.expanduser(sys.argv[1]))
+    if not os.path.isdir(root):
+        print(f"Error: '{root}' is not a directory", file=sys.stderr)
+        sys.exit(1)
+
+    scan(root)
+
+if __name__ == "__main__":
+    main()
