@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+import os
+import sys
+import re
+from collections import Counter
+
+# Magic-number signatures for file-type detection
+MAGIC_TYPES = [
+    (b'\x1f\x8b', 'gzip'),
+    (b'PK\x03\x04', 'zip'),
+    (b'\x89PNG\r\n\x1a\n', 'png'),
+    (b'\xff\xd8\xff', 'jpg'),
+    (b'%PDF', 'pdf'),
+    (b'\x7fELF', 'elf'),
+    (b'\xfd7zXZ\x00', 'xz'),
+]
+
+EXT_RE = re.compile(r'^[a-z0-9]+$')
+
+def detect_type(path):
+    """Peek at the first bytes to identify certain formats, else 'unknown'."""
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(8)
+    except:
+        return 'unknown'
+    for sig, name in MAGIC_TYPES:
+        if head.startswith(sig):
+            return name
+    return 'unknown'
+
+def scan(root, out):
+    path_count = 0
+    skip_count = 0
+    global_counts = Counter()
+    xz_list = []
+    unknown_list = []
+    direct_counts = {}
+    local_map = {}  # dirpath -> Counter of types directly in it
+
+    # 1) Walk entire tree: per-dir extension tables + direct file counts
+    for dirpath, dirnames, filenames in os.walk(root):
+        path_count += 1
+        local = Counter()
+        for fname in filenames:
+            full = os.path.join(dirpath, fname)
+            try:
+                raw_ext = os.path.splitext(fname)[1].lower().lstrip('.')
+                if raw_ext and EXT_RE.fullmatch(raw_ext):
+                    key = raw_ext
+                else:
+                    key = detect_type(full)
+                local[key] += 1
+                global_counts[key] += 1
+                if key == 'xz':      xz_list.append(full)
+                if key == 'unknown': unknown_list.append(full)
+            except:
+                skip_count += 1
+
+        total_here = sum(local.values())
+        direct_counts[dirpath] = total_here
+        local_map[dirpath] = local
+
+        # Print the per-directory table
+        col1 = max(len("Type/Extension"), *(len(k) for k in local)) if local else len("Type/Extension")
+        col2 = max(len("Count"), *(len(str(v)) for v in local.values())) if local else len("Count")
+        border = f"+{'-'*(col1+2)}+{'-'*(col2+2)}+"
+        header = f"| {'Type/Extension'.ljust(col1)} | {'Count'.rjust(col2)} |"
+
+        print(f"Directory: {dirpath}", file=out)
+        print(f"Total files: {total_here}", file=out)
+        print(border, file=out)
+        print(header, file=out)
+        print(border, file=out)
+        for ext, cnt in sorted(local.items()):
+            print(f"| {ext.ljust(col1)} | {str(cnt).rjust(col2)} |", file=out)
+        print(border, file=out)
+        print("", file=out)
+
+    # 2) Overall summary
+    total_files = sum(global_counts.values())
+    col1 = max(len("Type/Extension"), *(len(k) for k in global_counts)) if global_counts else len("Type/Extension")
+    col2 = max(len("Count"), *(len(str(v)) for v in global_counts.values())) if global_counts else len("Count")
+    border = f"+{'-'*(col1+2)}+{'-'*(col2+2)}+"
+    header = f"| {'Type/Extension'.ljust(col1)} | {'Count'.rjust(col2)} |"
+
+    print("Overall summary:", file=out)
+    print(f"Total files scanned: {total_files}", file=out)
+    print(border, file=out)
+    print(header, file=out)
+    print(border, file=out)
+    for ext, cnt in sorted(global_counts.items()):
+        print(f"| {ext.ljust(col1)} | {str(cnt).rjust(col2)} |", file=out)
+    print(border, file=out)
+    print("", file=out)
+    print(f"Total directories scanned: {path_count}", file=out)
+    print(f"Skipped files: {skip_count}", file=out)
+    print("", file=out)
+
+    # 3) Lists of .xz and unknown-type files
+    print("List of .xz files detected:", file=out)
+    if xz_list:
+        for p in xz_list: print(p, file=out)
+    else:
+        print("  (none)", file=out)
+    print("", file=out)
+
+    print("List of unknown-type files detected:", file=out)
+    if unknown_list:
+        for p in unknown_list: print(p, file=out)
+    else:
+        print("  (none)", file=out)
+    print("", file=out)
+
+    # 4) Build recursive type counts: sum local_map for each dir + its subdirs
+    recursive_type = {}
+    for d in local_map:
+        counter = Counter()
+        for sub, cnts in local_map.items():
+            if sub == d or sub.startswith(d + os.sep):
+                counter.update(cnts)
+        recursive_type[d] = counter
+
+    # 5) Recursive summary for level-1 directories with type breakdown
+    level1 = sorted(os.path.join(root, d) for d in os.listdir(root)
+                    if os.path.isdir(os.path.join(root, d)))
+    # gather all types present among level1
+    types = sorted({t for d in level1 for t in recursive_type.get(d, {})})
+    headers = ["Directory"] + types + ["Total"]
+    # compute column widths
+    widths = [len(h) for h in headers]
+    rows = []
+    for d in level1:
+        row = [d]
+        total = 0
+        for t in types:
+            cnt = recursive_type.get(d, {}).get(t, 0)
+            row.append(str(cnt))
+            total += cnt
+        row.append(str(total))
+        rows.append(row)
+        # adjust widths
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    # print the table
+    border = "+" + "+".join("-"*(w+2) for w in widths) + "+"
+    header = "| " + " | ".join(h.ljust(widths[i]) for i,h in enumerate(headers)) + " |"
+    print("Recursive summary for level-1 directories (by type):", file=out)
+    print(border, file=out)
+    print(header, file=out)
+    print(border, file=out)
+    for row in rows:
+        line = "| " + " | ".join(row[i].ljust(widths[i]) for i in range(len(headers))) + " |"
+        print(line, file=out)
+    print(border, file=out)
+
+def main():
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} /path/to/root", file=sys.stderr)
+        sys.exit(1)
+    root = os.path.abspath(os.path.expanduser(sys.argv[1]))
+    if not os.path.isdir(root):
+        print(f"Error: '{root}' is not a directory", file=sys.stderr)
+        sys.exit(1)
+    with open("count6.txt", "w") as out:
+        scan(root, out)
+
+if __name__ == "__main__":
+    main()
