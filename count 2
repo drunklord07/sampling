@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+# count_ext_recursive.py
+
+import os
+import sys
+import re
+from collections import Counter
+
+# Minimal magic‐number signatures for common file types
+MAGIC_TYPES = [
+    (b'\x1f\x8b',           'gzip'),
+    (b'PK\x03\x04',         'zip'),
+    (b'\x89PNG\r\n\x1a\n',  'png'),
+    (b'\xff\xd8\xff',       'jpg'),
+    (b'%PDF',               'pdf'),
+    (b'\x7fELF',            'elf'),
+    (b'\xfd7zXZ\x00',       'xz'),
+]
+
+def detect_type(path):
+    """
+    Read the first few bytes of a file to detect its type via magic numbers.
+    Returns a lowercase type name or 'unknown'.
+    """
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(8)
+    except Exception:
+        return 'unknown'
+    for sig, name in MAGIC_TYPES:
+        if header.startswith(sig):
+            return name
+    return 'unknown'
+
+def scan(root, out):
+    path_count = 0
+    skip_count = 0
+    global_counts = Counter()
+    xz_list = []
+    unknown_list = []
+
+    # regex to validate an extension: only letters+digits
+    ext_re = re.compile(r'^[a-z0-9]+$')
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        path_count += 1
+        local_counts = Counter()
+
+        for fname in filenames:
+            full = os.path.join(dirpath, fname)
+            try:
+                raw_ext = os.path.splitext(fname)[1].lower().lstrip('.')
+                if raw_ext and ext_re.fullmatch(raw_ext):
+                    key = raw_ext
+                else:
+                    key = detect_type(full)
+                local_counts[key] += 1
+                global_counts[key] += 1
+
+                # collect paths for xz and unknown
+                if key == 'xz':
+                    xz_list.append(full)
+                elif key == 'unknown':
+                    unknown_list.append(full)
+
+            except Exception:
+                skip_count += 1
+
+        # layout the per-dir table
+        col1 = max(len("Type/Extension"), *(len(k) for k in local_counts)) if local_counts else len("Type/Extension")
+        col2 = max(len("Count"), *(len(str(v)) for v in local_counts.values())) if local_counts else len("Count")
+        border = f"+{'-'*(col1+2)}+{'-'*(col2+2)}+"
+        header = f"| {'Type/Extension'.ljust(col1)} | {'Count'.rjust(col2)} |"
+
+        print(f"Directory: {dirpath}", file=out)
+        print(f"Total files: {sum(local_counts.values())}", file=out)
+        print(border, file=out)
+        print(header, file=out)
+        print(border, file=out)
+        for k, v in sorted(local_counts.items()):
+            print(f"| {k.ljust(col1)} | {str(v).rjust(col2)} |", file=out)
+        print(border, file=out)
+        print("", file=out)
+
+    # overall summary
+    total_files = sum(global_counts.values())
+    col1 = max(len("Type/Extension"), *(len(k) for k in global_counts)) if global_counts else len("Type/Extension")
+    col2 = max(len("Count"), *(len(str(v)) for v in global_counts.values())) if global_counts else len("Count")
+    border = f"+{'-'*(col1+2)}+{'-'*(col2+2)}+"
+    header = f"| {'Type/Extension'.ljust(col1)} | {'Count'.rjust(col2)} |"
+
+    print("Overall summary:", file=out)
+    print(f"Total files scanned: {total_files}", file=out)
+    print(border, file=out)
+    print(header, file=out)
+    print(border, file=out)
+    for k, v in sorted(global_counts.items()):
+        print(f"| {k.ljust(col1)} | {str(v).rjust(col2)} |", file=out)
+    print(border, file=out)
+    print("", file=out)
+    print(f"Total directories scanned: {path_count}", file=out)
+    print(f"Skipped files: {skip_count}", file=out)
+    print("", file=out)
+
+    # list all xz files
+    print("List of .xz files detected:", file=out)
+    if xz_list:
+        for p in xz_list:
+            print(p, file=out)
+    else:
+        print("  (none)", file=out)
+    print("", file=out)
+
+    # list all unknown-type files
+    print("List of unknown-type files detected:", file=out)
+    if unknown_list:
+        for p in unknown_list:
+            print(p, file=out)
+    else:
+        print("  (none)", file=out)
+
+def main():
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} /path/to/root", file=sys.stderr)
+        sys.exit(1)
+
+    root = os.path.abspath(os.path.expanduser(sys.argv[1]))
+    if not os.path.isdir(root):
+        print(f"Error: '{root}' is not a directory", file=sys.stderr)
+        sys.exit(1)
+
+    with open("count2.txt", "w") as out:
+        scan(root, out)
+
+if __name__ == "__main__":
+    main()
