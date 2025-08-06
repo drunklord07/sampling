@@ -1,0 +1,84 @@
+import os
+import shutil
+import sys
+
+# extensions we want exactly one of, in order:
+ALLOWED_EXTS = ['.gz', '.log', '.txt', '.xs', '.zip']
+
+def copy_one_of_each(src_folder, dest_folder, unknown_files):
+    """
+    For each ext in ALLOWED_EXTS, copy the first matching file.
+    Any file whose ext is not in ALLOWED_EXTS is appended to unknown_files.
+    Returns number of files copied.
+    """
+    copied = 0
+    files = os.listdir(src_folder)
+    # first: copy one per allowed ext
+    for ext in ALLOWED_EXTS:
+        for f in files:
+            if f.lower().endswith(ext):
+                src = os.path.join(src_folder, f)
+                dst = os.path.join(dest_folder, f)
+                shutil.copy2(src, dst)
+                print(f"Copied ({ext}): {src} → {dst}")
+                copied += 1
+                break
+
+    # then: log everything else
+    for f in files:
+        if not any(f.lower().endswith(ext) for ext in ALLOWED_EXTS):
+            unknown_files.append(os.path.join(src_folder, f))
+
+    return copied
+
+def main(source_root):
+    if not os.path.isdir(source_root):
+        print("❌ Provided path is not a valid directory.")
+        return
+
+    base_output = os.path.join(os.getcwd(), "output")
+    os.makedirs(base_output, exist_ok=True)
+
+    total_copied = 0
+    skipped_folders = []
+    unknown_files = []
+
+    for root, dirs, files in os.walk(source_root):
+        # mirror directory
+        rel = os.path.relpath(root, source_root)
+        target = os.path.join(base_output, rel)
+        os.makedirs(target, exist_ok=True)
+
+        try:
+            total_copied += copy_one_of_each(root, target, unknown_files)
+        except PermissionError:
+            print(f"❌ Skipping folder (no permission): {root}")
+            skipped_folders.append(root)
+
+    # write summary
+    with open("all_done.txt", "w") as f:
+        f.write(f"Total files copied: {total_copied}\n")
+    print(f"✅ All done. Total files copied: {total_copied}")
+
+    # skipped folders
+    if skipped_folders:
+        with open("skipped_folders.txt", "w") as f:
+            f.write(f"Skipped folders due to permission errors: {len(skipped_folders)}\n")
+            for p in skipped_folders:
+                f.write(p + "\n")
+        print(f"⚠️ Skipped folders: {len(skipped_folders)} (see skipped_folders.txt)")
+
+    # unknown files
+    if unknown_files:
+        with open("unknown_files.txt", "w") as f:
+            f.write("Files with extensions outside of " +
+                    ", ".join(ALLOWED_EXTS) + ":\n")
+            for p in unknown_files:
+                f.write(p + "\n")
+        print(f"⚠️ Unknown files logged: {len(unknown_files)} (see unknown_files.txt)")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python copy_by_type.py /path/to/source")
+    else:
+        main(sys.argv[1])
