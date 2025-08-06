@@ -1,14 +1,16 @@
 import os
 import shutil
 import sys
+from collections import Counter
 
 # extensions we want exactly one of, in order:
 ALLOWED_EXTS = ['.gz', '.log', '.txt', '.xs', '.zip']
 
-def copy_one_of_each(src_folder, dest_folder, unknown_files):
+def copy_one_of_each(src_folder, dest_folder, unknown_files, counts):
     """
     For each ext in ALLOWED_EXTS, copy the first matching file.
     Any file whose ext is not in ALLOWED_EXTS is appended to unknown_files.
+    Updates counts[ext] for each copied file.
     Returns number of files copied.
     """
     copied = 0
@@ -21,6 +23,7 @@ def copy_one_of_each(src_folder, dest_folder, unknown_files):
                 dst = os.path.join(dest_folder, f)
                 shutil.copy2(src, dst)
                 print(f"Copied ({ext}): {src} → {dst}")
+                counts[ext] += 1
                 copied += 1
                 break
 
@@ -28,6 +31,7 @@ def copy_one_of_each(src_folder, dest_folder, unknown_files):
     for f in files:
         if not any(f.lower().endswith(ext) for ext in ALLOWED_EXTS):
             unknown_files.append(os.path.join(src_folder, f))
+            counts['unknown'] += 1
 
     return copied
 
@@ -36,46 +40,64 @@ def main(source_root):
         print("❌ Provided path is not a valid directory.")
         return
 
+    # prepare
     base_output = os.path.join(os.getcwd(), "output")
     os.makedirs(base_output, exist_ok=True)
 
     total_copied = 0
     skipped_folders = []
     unknown_files = []
+    # initialize counts
+    counts = Counter({ext: 0 for ext in ALLOWED_EXTS})
+    counts['unknown'] = 0
 
+    # walk tree
     for root, dirs, files in os.walk(source_root):
-        # mirror directory
         rel = os.path.relpath(root, source_root)
         target = os.path.join(base_output, rel)
         os.makedirs(target, exist_ok=True)
 
         try:
-            total_copied += copy_one_of_each(root, target, unknown_files)
+            total_copied += copy_one_of_each(root, target, unknown_files, counts)
         except PermissionError:
             print(f"❌ Skipping folder (no permission): {root}")
             skipped_folders.append(root)
 
-    # write summary
+    # write overall done
     with open("all_done.txt", "w") as f:
         f.write(f"Total files copied: {total_copied}\n")
-    print(f"✅ All done. Total files copied: {total_copied}")
 
-    # skipped folders
+    # write per-type summary
+    with open("summary.txt", "w") as f:
+        f.write("=== Copy Summary ===\n")
+        for ext in ALLOWED_EXTS + ['unknown']:
+            f.write(f"{ext or 'other'}:\t{counts[ext]}\n")
+
+    # write skipped
     if skipped_folders:
         with open("skipped_folders.txt", "w") as f:
             f.write(f"Skipped folders due to permission errors: {len(skipped_folders)}\n")
             for p in skipped_folders:
                 f.write(p + "\n")
-        print(f"⚠️ Skipped folders: {len(skipped_folders)} (see skipped_folders.txt)")
 
-    # unknown files
+    # write unknown files list
     if unknown_files:
         with open("unknown_files.txt", "w") as f:
-            f.write("Files with extensions outside of " +
-                    ", ".join(ALLOWED_EXTS) + ":\n")
+            f.write("Files with extensions outside of allowed list:\n")
             for p in unknown_files:
                 f.write(p + "\n")
-        print(f"⚠️ Unknown files logged: {len(unknown_files)} (see unknown_files.txt)")
+
+    # console summary
+    print(f"\n✅ All done. Total files copied: {total_copied}")
+    print("📊 Summary by type:")
+    for ext in ALLOWED_EXTS:
+        print(f"   {ext:>4} : {counts[ext]}")
+    print(f"   other : {counts['unknown']}")
+    if skipped_folders:
+        print(f"⚠️  Skipped folders: {len(skipped_folders)} (see skipped_folders.txt)")
+    if unknown_files:
+        print(f"⚠️  Unknown files logged: {counts['unknown']} (see unknown_files.txt)")
+    print("📄 Detailed summary written to summary.txt")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
