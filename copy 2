@@ -34,7 +34,7 @@ def copy_one_of_each(src_folder, dest_folder, unknown_files, counts, skipped_fil
                     copied += 1
                     print(f"Copied ({ext}): {src} → {dst}")
                 except Exception as e:
-                    print(f"❌ Failed to copy: {src} → {e}")
+                    print(f" Failed to copy: {src} → {e}")
                     skipped_files.append((src_folder, fname, str(e)))
                 break  # only one per ext
 
@@ -49,7 +49,7 @@ def copy_one_of_each(src_folder, dest_folder, unknown_files, counts, skipped_fil
 
 def main(source_root):
     if not os.path.isdir(source_root):
-        print("❌ Provided path is not a valid directory.")
+        print(" Provided path is not a valid directory.")
         return
 
     base_output = os.path.join(os.getcwd(), "output")
@@ -71,7 +71,7 @@ def main(source_root):
         try:
             os.makedirs(target, exist_ok=True)
         except Exception as e:
-            print(f"❌ Skipping folder (no permission): {root} → {e}")
+            print(f" Skipping folder (no permission): {root} → {e}")
             skipped_dirs.append((root, str(e)))
             continue
 
@@ -79,7 +79,7 @@ def main(source_root):
         try:
             total_copied += copy_one_of_each(root, target, unknown_files, counts, skipped_files)
         except PermissionError as e:
-            print(f"❌ Skipping folder (no permission): {root}")
+            print(f" Skipping folder (no permission): {root}")
             skipped_dirs.append((root, str(e)))
 
     # === write all_done.txt ===
@@ -104,7 +104,7 @@ def main(source_root):
             for folder, fname, err in skipped_files:
                 f.write(f"{os.path.join(folder, fname)}  → {err}\n")
     if skipped_dirs or skipped_files:
-        print(f"⚠️  Skipped entries logged to skipped_folders.txt")
+        print(f"Skipped entries logged to skipped_folders.txt")
 
     # === write unknown_files.txt ===
     if unknown_files:
@@ -112,7 +112,7 @@ def main(source_root):
             f.write("Files with ext outside allowed list:\n")
             for folder, fname, ext in unknown_files:
                 f.write(f"Folder: {folder}\n  File: {fname}\n  Ext : {ext}\n\n")
-        print(f"⚠️  Unknown files logged: {len(unknown_files)} (see unknown_files.txt)")
+        print(f" Unknown files logged: {len(unknown_files)} (see unknown_files.txt)")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
