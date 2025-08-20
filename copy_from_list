@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+import os
+import shutil
+import sys
+import re
+from collections import Counter, defaultdict
+
+# Extensions we want to allow (copied once per folder)
+ALLOWED_EXTS = ['.tar.xz', '.gz', '.log', '.txt', '.zip', '.xz']
+
+def sanitize_name(name, existing):
+    """Ensure folder name is unique under output/"""
+    if name not in existing:
+        existing[name] = 1
+        return name
+    else:
+        existing[name] += 1
+        return f"{name}{existing[name]}"
+
+def get_log_extension(filename):
+    """
+    Smarter extension recognition:
+    - Treat .log.N, .log-YYYY-MM-DD, .log_YYYY_MM_DD as .log
+    """
+    if re.search(r'\.log(\.\d+)?$', filename):
+        return '.log'
+    if re.search(r'\.log[-_.]?\d{4}[-_.]?\d{2}[-_.]?\d{2}', filename):
+        return '.log'
+    return os.path.splitext(filename)[1].lower()
+
+def copy_one_of_each(src_folder, dest_folder, unknown_files, counts, skipped_files, copied_flags):
+    try:
+        entries = os.listdir(src_folder)
+    except PermissionError as e:
+        raise
+
+    copied = 0
+    for name in entries:
+        src = os.path.join(src_folder, name)
+        if not os.path.isfile(src):
+            continue
+
+        ext = get_log_extension(name)
+        if ext in ALLOWED_EXTS and ext not in copied_flags:
+            dst = os.path.join(dest_folder, name)
+            try:
+                shutil.copy2(src, dst)
+                counts[ext] += 1
+                copied += 1
+                copied_flags.add(ext)
+                print(f"Copied ({ext}): {src} → {dst}")
+            except Exception as e:
+                skipped_files.append((src, str(e)))
+                print(f"❌ Failed to copy {src}: {e}")
+
+    for name in entries:
+        path = os.path.join(src_folder, name)
+        if os.path.isfile(path):
+            ext = get_log_extension(name)
+            if ext not in ALLOWED_EXTS:
+                unknown_ext = os.path.splitext(name)[1] or '(no ext)'
+                unknown_files.append((path, unknown_ext))
+                counts['unknown'] += 1
+
+    return copied
+
+def process_path(source_root, output_base, unknown_files, skipped_dirs, skipped_files,
+                 counts, folder_rename_map, total_folders, total_files, total_copied):
+    if not os.path.isdir(source_root):
+        skipped_dirs.append((source_root, "Not a directory or does not exist"))
+        return
+
+    base_name = os.path.basename(os.path.normpath(source_root))
+    unique_base = sanitize_name(base_name, folder_rename_map)
+    root_output = os.path.join(output_base, unique_base)
+
+    for root, dirs, files in os.walk(source_root):
+        total_folders[0] += 1
+        total_files[0] += len(files)
+
+        rel = os.path.relpath(root, source_root)
+        target = os.path.join(root_output, rel)
+        try:
+            os.makedirs(target, exist_ok=True)
+        except Exception as e:
+            skipped_dirs.append((root, str(e)))
+            print(f"❌ Skipping folder (cannot create mirror): {root}: {e}")
+            continue
+
+        try:
+            copied_flags = set()
+            copied = copy_one_of_each(root, target, unknown_files, counts, skipped_files, copied_flags)
+            total_copied[0] += copied
+        except PermissionError as e:
+            skipped_dirs.append((root, str(e)))
+            print(f"❌ Skipping folder (no permission): {root}: {e}")
+
+def read_input_paths(file_path):
+    with open(file_path, "r") as f:
+        return [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+
+def main(input_file):
+    input_paths = read_input_paths(input_file)
+    output_base = os.path.join(os.getcwd(), "output")
+    os.makedirs(output_base, exist_ok=True)
+
+    unknown_files = []
+    skipped_dirs = []
+    skipped_files = []
+    counts = Counter({ext: 0 for ext in ALLOWED_EXTS})
+    counts['unknown'] = 0
+    folder_rename_map = {}  # {foldername: count}
+    folder_mapping = {}     # {original: renamed}
+    total_folders = [0]
+    total_files = [0]
+    total_copied = [0]
+
+    for path in input_paths:
+        original = os.path.basename(os.path.normpath(path))
+        renamed = sanitize_name(original, folder_rename_map)
+        folder_mapping[original] = renamed
+        process_path(path, output_base, unknown_files, skipped_dirs, skipped_files,
+                     counts, folder_rename_map, total_folders, total_files, total_copied)
+
+    with open("all_done.txt", "w") as f:
+        f.write(f"Total input paths:       {len(input_paths)}\n")
+        f.write(f"Valid input paths:       {len(input_paths) - len([s for s in skipped_dirs if s[0] in input_paths])}\n")
+        f.write(f"Total folders visited:   {total_folders[0]}\n")
+        f.write(f"Total files found:       {total_files[0]}\n")
+        f.write(f"Total files copied:      {total_copied[0]}\n\n")
+        f.write("=== Files copied by type ===\n")
+        for ext in ALLOWED_EXTS:
+            f.write(f"{ext:>8} : {counts[ext]}\n")
+        f.write(f"{'unknown':>8} : {counts['unknown']}\n")
+
+        if folder_mapping:
+            f.write("\n=== Renamed folder mappings ===\n")
+            for original, renamed in folder_mapping.items():
+                if original != renamed:
+                    f.write(f"{original} → {renamed}\n")
+
+    if skipped_dirs or skipped_files:
+        with open("skipped_folders.txt", "w") as f:
+            if skipped_dirs:
+                f.write("Folders skipped:\n")
+                for folder, reason in skipped_dirs:
+                    f.write(f"{folder}  →  {reason}\n")
+                f.write("\n")
+            if skipped_files:
+                f.write("Files skipped due to copy errors:\n")
+                for file_path, err in skipped_files:
+                    f.write(f"{file_path}  →  {err}\n")
+
+    if unknown_files:
+        with open("unknown_files.txt", "w") as f:
+            f.write("Files with unknown extensions:\n")
+            for file_path, ext in unknown_files:
+                f.write(f"{file_path}  →  {ext}\n")
+
+    print("\n✅ Done. See 'all_done.txt' for summary.")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python3 copy_from_paths.py input_paths.txt")
+    else:
+        main(sys.argv[1])
